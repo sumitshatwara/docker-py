@@ -1,7 +1,7 @@
 import pytest
 import docker
 import yaml
-from .base import TEST_API_VERSION
+from .base import TEST_API_VERSION, BUSYBOX
 from ..helpers import requires_api_version
 
 from hpe_3par_manager import HPE3ParBackendVerification,HPE3ParVolumePluginTest
@@ -24,6 +24,7 @@ COMPRESS_SIZE = cfg['volumes']['compress_size']
 class TestVolumes(HPE3ParBackendVerification,HPE3ParVolumePluginTest):
     @classmethod
     def setUpClass(cls):
+        # super(TestVolumes, cls).setUp()
         c = docker.APIClient(
             version=TEST_API_VERSION,
             **docker.utils.kwargs_from_env()
@@ -32,6 +33,7 @@ class TestVolumes(HPE3ParBackendVerification,HPE3ParVolumePluginTest):
             prv = c.plugin_privileges(HPE3PAR)
             for d in c.pull_plugin(HPE3PAR, prv):
                 pass
+            # self.tmp_plugins.append(HPE3PAR)
             if HOST_OS == 'ubuntu':
                 c.configure_plugin(HPE3PAR, {
                     'certs.source': CERTS_SOURCE
@@ -51,6 +53,7 @@ class TestVolumes(HPE3ParBackendVerification,HPE3ParVolumePluginTest):
 
     @classmethod
     def tearDownClass(cls):
+        # super(TestVolumes, cls).tearDown()
         c = docker.APIClient(
             version=TEST_API_VERSION,
             **docker.utils.kwargs_from_env()
@@ -60,6 +63,7 @@ class TestVolumes(HPE3ParBackendVerification,HPE3ParVolumePluginTest):
         except docker.errors.APIError:
             pass
 
+        # for p in self.tmp_plugins:
         try:
             c.remove_plugin(HPE3PAR, force=True)
         except docker.errors.APIError:
@@ -245,3 +249,4 @@ class TestVolumes(HPE3ParBackendVerification,HPE3ParVolumePluginTest):
                                          size=THIN_SIZE, flash_cache='true')
         for i in range(3):
             self.client.remove_volume(name[i], force=True)
+

@@ -2,8 +2,9 @@ import docker
 import pytest
 import yaml
 
-from .base import BaseAPIIntegrationTest, TEST_API_VERSION
+from .base import BaseAPIIntegrationTest, TEST_API_VERSION, BUSYBOX
 from ..helpers import requires_api_version
+from hpe_3par_manager import HPE3ParBackendVerification,HPE3ParVolumePluginTest
 
 # Importing test data from YAML config file
 with open("testdata/test_config.yml", 'r') as ymlfile:
@@ -17,7 +18,8 @@ CERTS_SOURCE = cfg['plugin']['certs_source']
 
 
 @requires_api_version('1.25')
-class PluginTest(BaseAPIIntegrationTest):
+class PluginTest(HPE3ParBackendVerification,HPE3ParVolumePluginTest):
+
     @classmethod
     def teardown_class(cls):
         c = docker.APIClient(

@@ -13,11 +13,13 @@ from hpe3parclient.client import HPE3ParClient
 
 
 # Importing test data from YAML config file
+#with open("tests/integration/testdata/test_config.yml", 'r') as ymlfile:
 with open("testdata/test_config.yml", 'r') as ymlfile:
     cfg = yaml.load(ymlfile)
 
 # Declaring Global variables and assigning the values from YAML config file
 HPE3PAR = cfg['plugin']['latest_version']
+HPE3PAR2 = cfg['plugin']['old_version']
 ETCD_HOST = cfg['etcd']['host']
 ETCD_PORT = cfg['etcd']['port']
 CLIENT_CERT = cfg['etcd']['client_cert']
@@ -32,6 +34,11 @@ class HPE3ParVolumePluginTest(BaseAPIIntegrationTest):
     def hpe_create_volume(self, name, driver, **kwargs):
         if 'flash_cache' in kwargs:
             kwargs['flash-cache'] = kwargs.pop('flash_cache')
+
+        try:
+            old = kwargs.pop('old')
+        except:
+            old = False
         # Create a volume
         docker_volume = self.client.create_volume(name=name, driver=driver,
                                                   driver_opts=kwargs)
@@ -39,7 +46,10 @@ class HPE3ParVolumePluginTest(BaseAPIIntegrationTest):
         self.assertIn('Name', docker_volume)
         self.assertEqual(docker_volume['Name'], name)
         self.assertIn('Driver', docker_volume)
-        self.assertEqual(docker_volume['Driver'], HPE3PAR)
+        if old:
+            self.assertEqual(docker_volume['Driver'], HPE3PAR2)
+        else:
+            self.assertEqual(docker_volume['Driver'], HPE3PAR)
         # Verify all volume optional parameters in docker managed plugin system
         if 'size' in kwargs:
             self.assertIn('size', docker_volume['Options'])
@@ -229,7 +239,7 @@ class HPE3ParBackendVerification(BaseAPIIntegrationTest):
             self.assertEqual(etcd_volume, None)
         hpe3par_cli.logout()
 
-    def hpe_verify_volume_mount(self, volume_name):
+    def hpe_verify_volume_mount(self, volume_name, multipath=False):
 
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
         hpe3par_cli = self._hpe_get_3par_client_login()
@@ -239,9 +249,19 @@ class HPE3ParBackendVerification(BaseAPIIntegrationTest):
         etcd_volume_id = etcd_volume['id']
         # Get volume details and VLUN details from 3Par array
         backend_volume_name = utils.get_3par_vol_name(etcd_volume_id)
-        vlun = hpe3par_cli.getVLUN(backend_volume_name)
-        # Verify VLUN is present in 3Par array.
-        self.assertNotEqual(vlun, None)
+        vluns = hpe3par_cli.getVLUNs()
+        vlun_cnt = 0
+        # Multipath Verification
+        for member in vluns['members']:
+            if member['volumeName'] == backend_volume_name and member['active']:
+                vlun_cnt += 1
+                if vlun_cnt == 2:
+                    break
+        if multipath:
+            self.assertEqual(vlun_cnt, 2)
+        else:
+            self.assertEqual(vlun_cnt, 1)
+                    
         hpe3par_cli.logout()
 
     def hpe_verify_volume_unmount(self, volume_name):
@@ -262,3 +282,28 @@ class HPE3ParBackendVerification(BaseAPIIntegrationTest):
         except exc.HTTPNotFound:
             return
         hpe3par_cli.logout()
+
+    def hpe_get_vlun(self, volume_name):
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        hpe3par_cli = self._hpe_get_3par_client_login()
+        # Get volume details from etcd service
+        et = EtcdUtil(ETCD_HOST, ETCD_PORT, CLIENT_CERT, CLIENT_KEY)
+        etcd_volume = et.get_vol_byname(volume_name)
+        etcd_volume_id = etcd_volume['id']
+        # Get volume details and VLUN details from 3Par array
+        backend_volume_name = utils.get_3par_vol_name(etcd_volume_id)
+        vlun = hpe3par_cli.getVLUN(backend_volume_name)
+        hpe3par_cli.logout()
+        return vlun
+
+    def hpe_check_volume(self, volume_name):
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        hpe3par_cli = self._hpe_get_3par_client_login()
+        et = EtcdUtil(ETCD_HOST, ETCD_PORT, CLIENT_CERT, CLIENT_KEY)
+        etcd_volume = et.get_vol_byname(volume_name)
+        etcd_volume_id = etcd_volume['id']
+        # Get volume details and VLUN details from 3Par array
+        backend_volume_name = utils.get_3par_vol_name(etcd_volume_id)
+        return hpe3par_cli.getVolume(backend_volume_name)
+        hpe3par_cli.logout()
+        

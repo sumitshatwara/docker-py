@@ -11,6 +11,7 @@ from ..helpers import requires_api_version
 from hpe_3par_manager import HPE3ParBackendVerification,HPE3ParVolumePluginTest
 
 # Importing test data from YAML config file
+#with open("tests/integration/testdata/test_config.yml", 'r') as ymlfile:
 with open("testdata/test_config.yml", 'r') as ymlfile:
     cfg = yaml.load(ymlfile)
 
@@ -87,6 +88,31 @@ class VolumeBindTest(HPE3ParBackendVerification,HPE3ParVolumePluginTest):
                               )
         # Verifying in 3par
         self.hpe_verify_volume_mount(volume_name)
+
+    def test_volume_mount_multipath(self):
+        '''
+           This is a volume mount test. This test to be called only when multipath is enabled.
+
+           Steps:
+           1. Create volume and verify if volume got created in docker host and 3PAR array
+           2. Create a host config file to setup container.
+           3. Create a container and mount volume to it.
+           4. Verify if VLUN is available in 3Par array.
+
+        '''
+        volume_name = 'volume_mount'
+        self.tmp_volumes.append(volume_name)
+        self.hpe_create_volume(volume_name, driver=HPE3PAR,
+                               size='5', provisioning='thin')
+        host_conf = self.hpe_create_host_config(volume_driver=HPE3PAR,
+                                                binds='volume_mount:/data1')
+        self.hpe_mount_volume(BUSYBOX, command='sh', detach=True,
+                              tty=True, stdin_open=True,
+                              name='mounter1', host_config=host_conf
+                              )
+        # Verifying in 3par
+        self.hpe_verify_volume_mount(volume_name, multipath=True)
+
 
     def test_volume_unmount(self):
         '''
@@ -206,3 +232,128 @@ class VolumeBindTest(HPE3ParBackendVerification,HPE3ParVolumePluginTest):
         self.client.start(ctnr)
         res = self.client.wait(ctnr)
         self.assertNotEqual(res, 0)
+
+    def test_remove_unused_volume(self):
+        '''
+           This is a remove volumes test with force option.
+
+           Steps:
+           1. Create a volume with different volume properties.
+           2. Verify if all volumes are removed forcefully.
+        '''
+        name = ['volume1', 'volume2']
+        for i in range(len(name)):
+            self.tmp_volumes.append(name[i])
+            self.hpe_create_volume(name[i], driver=HPE3PAR)
+        host_conf = self.hpe_create_host_config(volume_driver=HPE3PAR,
+                                                binds='volume1:/data1')
+        self.hpe_mount_volume(BUSYBOX, command='sh', detach=True,
+                              tty=True, stdin_open=True,
+                              name='mounter1', host_config=host_conf
+                              )
+        # delete volume if vlun found
+        for j in range(len(name)):
+            try:
+                self.hpe_get_vlun(name[j])
+            except:
+                self.client.remove_volume(name[j], force=True)
+
+        try:
+            self.hpe_check_volume(name[1])
+        except:
+            pass
+
+    def test_upgrade_plugin_mount(self):
+        # This test will upgrade the plugin with same repository name
+        volume_name = 'volume_mount'
+        self.tmp_volumes.append(volume_name)
+        self.hpe_create_volume(volume_name, driver=HPE3PAR,
+                               size='5', provisioning='thin')
+        host_conf = self.hpe_create_host_config(volume_driver=HPE3PAR,
+                                                binds='volume_mount:/data1')
+        container = self.hpe_create_container(BUSYBOX, command="sh -c 'echo \"hello\" > /data1/test'",
+                              detach=True, tty=True, stdin_open=True,
+                              name='mounter1', host_config=host_conf
+                              )
+        id = container.get('Id')
+        self.tmp_containers.append(id)
+        self.client.start(id)
+#       Upgrade Plugin
+        pl_data = self.ensure_plugin_installed(HPE3PAR2)
+        self.tmp_plugins.append(HPE3PAR2)
+        self.client.configure_plugin(HPE3PAR2, {
+            'certs.source': '/tmp/'
+        })
+        assert pl_data['Enabled'] is False
+        prv = self.client.plugin_privileges(HPE3PAR2)
+        logs = [d for d in self.client.upgrade_plugin(HPE3PAR2, HPE3PAR, prv)]
+        assert filter(lambda x: x['status'] == 'Download complete', logs)
+        if HOST_OS == 'ubuntu':
+            self.client.configure_plugin(HPE3PAR2, {
+                'certs.source': CERTS_SOURCE
+                })
+        else:
+            self.client.configure_plugin(HPE3PAR2, {
+                'certs.source': CERTS_SOURCE,
+                'glibc_libs.source': '/lib64'
+                })
+        assert self.client.inspect_plugin(HPE3PAR2)
+        assert self.client.enable_plugin(HPE3PAR2)
+        out = client.containers.run(
+            BUSYBOX, "cat /data1/test",
+            volumes=["volume_mount:/data1"]
+        )
+#       Create Another Volume
+        volume_name = 'volume_mount1'
+        self.tmp_volumes.append(volume_name)
+        self.hpe_create_volume(volume_name, driver=HPE3PAR,
+                               size='5', provisioning='thin')
+        host_conf = self.hpe_create_host_config(volume_driver=HPE3PAR,
+                                                binds='volume_mount1:/data1')
+        self.client.disable_plugin(HPE3PAR2)
+        self.client.remove_plugin(HPE3PAR2, force=True)
+
+    def test_volume_persists_container_is_removed(self):
+        '''
+           This is a persistent volume test.
+
+           Steps:
+           1. Create volume and verify if volume got created in docker host and 3PAR array
+           2. Create a host config file to setup container.
+           3. Create a container and mount volume to it.
+           4. Write the data in a file which gets created in 3Par volume.
+           5. Stop the container
+           6. Try to delete the volume - it should not get deleted
+           7. Remove the container
+           8. List volumes - Volume should be listed.
+           9. Delete the volume - Volume should get deleted.
+
+        '''
+
+        client = docker.from_env(version=TEST_API_VERSION)
+        volume_name = 'volume_persistence'
+        container_name = 'mounter1'
+        self.tmp_volumes.append(volume_name)
+        self.hpe_create_volume(volume_name, driver=HPE3PAR,
+                               size='5', provisioning='thin')
+        container = client.containers.run(BUSYBOX,"sh -c 'echo \"hello\" > /insidecontainer/test; sleep 60'",
+                                     detach=True,name='mounter1',volumes={'volume_persistence' : {'bind' : '/insidecontainer', 'mode' : 'rw' }})
+        self.tmp_containers.append(container.id)
+        container.start()
+        container.stop()
+        container.start()
+        assert container.exec_run("cat /insidecontainer/test") == b"hello\n"
+
+        try:
+            self.client.remove_volume(volume_name)
+        except Exception as ex:
+            resp = ex.status_code
+            self.assertEqual(resp, 409)
+
+        container.stop()
+        container.remove()
+        self.hpe_verify_volume_created(volume_name,size=5,provisioning='thin')
+
+        self.client.remove_volume(volume_name)
+        self.hpe_verify_volume_deleted(volume_name)
+

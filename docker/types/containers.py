@@ -4,8 +4,8 @@ import warnings
 from .. import errors
 from ..utils.utils import (
     convert_port_bindings, convert_tmpfs_mounts, convert_volume_binds,
-    format_environment, normalize_links, parse_bytes, parse_devices,
-    split_command, version_gte, version_lt,
+    format_environment, format_extra_hosts, normalize_links, parse_bytes,
+    parse_devices, split_command, version_gte, version_lt,
 )
 from .base import DictType
 from .healthcheck import Healthcheck
@@ -120,7 +120,7 @@ class HostConfig(dict):
                  isolation=None, auto_remove=False, storage_opt=None,
                  init=None, init_path=None, volume_driver=None,
                  cpu_count=None, cpu_percent=None, nano_cpus=None,
-                 cpuset_mems=None, runtime=None):
+                 cpuset_mems=None, runtime=None, mounts=None):
 
         if mem_limit is not None:
             self['Memory'] = parse_bytes(mem_limit)
@@ -257,10 +257,7 @@ class HostConfig(dict):
 
         if extra_hosts is not None:
             if isinstance(extra_hosts, dict):
-                extra_hosts = [
-                    '{0}:{1}'.format(k, v)
-                    for k, v in sorted(six.iteritems(extra_hosts))
-                ]
+                extra_hosts = format_extra_hosts(extra_hosts)
 
             self['ExtraHosts'] = extra_hosts
 
@@ -477,6 +474,11 @@ class HostConfig(dict):
             if version_lt(version, '1.25'):
                 raise host_config_version_error('runtime', '1.25')
             self['Runtime'] = runtime
+
+        if mounts is not None:
+            if version_lt(version, '1.30'):
+                raise host_config_version_error('mounts', '1.30')
+            self['Mounts'] = mounts
 
 
 def host_config_type_error(param, param_value, expected):

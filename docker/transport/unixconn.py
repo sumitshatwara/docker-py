@@ -18,7 +18,20 @@ except ImportError:
 RecentlyUsedContainer = urllib3._collections.RecentlyUsedContainer
 
 
+class UnixHTTPResponse(httplib.HTTPResponse, object):
+    def __init__(self, sock, *args, **kwargs):
+        disable_buffering = kwargs.pop('disable_buffering', False)
+        super(UnixHTTPResponse, self).__init__(sock, *args, **kwargs)
+        if disable_buffering is True:
+            # We must first create a new pointer then close the old one
+            # to avoid closing the underlying socket.
+            new_fp = sock.makefile('rb', 0)
+            self.fp.close()
+            self.fp = new_fp
+
+
 class UnixHTTPConnection(httplib.HTTPConnection, object):
+
     def __init__(self, base_url, unix_socket, timeout=60):
         super(UnixHTTPConnection, self).__init__(
             'localhost', timeout=timeout
@@ -26,12 +39,24 @@ class UnixHTTPConnection(httplib.HTTPConnection, object):
         self.base_url = base_url
         self.unix_socket = unix_socket
         self.timeout = timeout
+        self.disable_buffering = False
 
     def connect(self):
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         sock.settimeout(self.timeout)
         sock.connect(self.unix_socket)
         self.sock = sock
+
+    def putheader(self, header, *values):
+        super(UnixHTTPConnection, self).putheader(header, *values)
+        if header == 'Connection' and 'Upgrade' in values:
+            self.disable_buffering = True
+
+    def response_class(self, sock, *args, **kwargs):
+        if self.disable_buffering:
+            kwargs['disable_buffering'] = True
+
+        return UnixHTTPResponse(sock, *args, **kwargs)
 
 
 class UnixHTTPConnectionPool(urllib3.connectionpool.HTTPConnectionPool):

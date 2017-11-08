@@ -19,7 +19,7 @@ class BuildApiMixin(object):
               forcerm=False, dockerfile=None, container_limits=None,
               decode=False, buildargs=None, gzip=False, shmsize=None,
               labels=None, cache_from=None, target=None, network_mode=None,
-              squash=None):
+              squash=None, extra_hosts=None):
         """
         Similar to the ``docker build`` command. Either ``path`` or ``fileobj``
         needs to be set. ``path`` can be a local path (to a directory
@@ -93,14 +93,16 @@ class BuildApiMixin(object):
             shmsize (int): Size of `/dev/shm` in bytes. The size must be
                 greater than 0. If omitted the system uses 64MB
             labels (dict): A dictionary of labels to set on the image
-            cache_from (list): A list of images used for build cache
-                resolution
+            cache_from (:py:class:`list`): A list of images used for build
+                cache resolution
             target (str): Name of the build-stage to build in a multi-stage
                 Dockerfile
             network_mode (str): networking mode for the run commands during
                 build
             squash (bool): Squash the resulting images layers into a
                 single layer.
+            extra_hosts (dict): Extra hosts to add to /etc/hosts in building
+                containers, as a mapping of hostname to IP address.
 
         Returns:
             A generator for the build output.
@@ -228,6 +230,16 @@ class BuildApiMixin(object):
                 raise errors.InvalidVersion(
                     'squash was only introduced in API version 1.25'
                 )
+
+        if extra_hosts is not None:
+            if utils.version_lt(self._version, '1.27'):
+                raise errors.InvalidVersion(
+                    'extra_hosts was only introduced in API version 1.27'
+                )
+
+            if isinstance(extra_hosts, dict):
+                extra_hosts = utils.format_extra_hosts(extra_hosts)
+            params.update({'extrahosts': extra_hosts})
 
         if context is not None:
             headers = {'Content-Type': 'application/tar'}

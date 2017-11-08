@@ -268,6 +268,8 @@ class PluginTest(HPE3ParBackendVerification,HPE3ParVolumePluginTest):
         container.exec_run("sh -c 'echo \"hello\" > /insidecontainer/test'")
         assert container.exec_run("cat /insidecontainer/test") == b"hello\n"
         container.stop()
+        container.wait()
+        container.remove()
         self.hpe_verify_volume_unmount(volume_name)
         self.hpe_delete_volume(volume)
         self.hpe_verify_volume_deleted(volume_name)

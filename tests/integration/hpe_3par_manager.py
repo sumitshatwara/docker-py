@@ -2,7 +2,7 @@ import pytest
 import docker
 import yaml
 
-from .base import BaseAPIIntegrationTest
+from .base import BaseAPIIntegrationTest, TEST_API_VERSION
 from ..helpers import requires_api_version
 
 import utils
@@ -11,7 +11,6 @@ from etcdutil import EtcdUtil
 from hpe3parclient import exceptions as exc
 from hpe3parclient.client import HPE3ParClient
 
-
 # Importing test data from YAML config file
 #with open("tests/integration/testdata/test_config.yml", 'r') as ymlfile:
 with open("testdata/test_config.yml", 'r') as ymlfile:
@@ -19,12 +18,13 @@ with open("testdata/test_config.yml", 'r') as ymlfile:
 
 # Declaring Global variables and assigning the values from YAML config file
 HPE3PAR = cfg['plugin']['latest_version']
-HPE3PAR2 = cfg['plugin']['old_version']
+HPE3PAR_OLD = cfg['plugin']['old_version']
 ETCD_HOST = cfg['etcd']['host']
 ETCD_PORT = cfg['etcd']['port']
 CLIENT_CERT = cfg['etcd']['client_cert']
 CLIENT_KEY = cfg['etcd']['client_key']
 HPE3PAR_API_URL = cfg['backend']['3Par_api_url']
+PORTS_ZONES = cfg['multipath']['ports_zones']
 
 @requires_api_version('1.21')
 class HPE3ParVolumePluginTest(BaseAPIIntegrationTest):
@@ -35,10 +35,6 @@ class HPE3ParVolumePluginTest(BaseAPIIntegrationTest):
         if 'flash_cache' in kwargs:
             kwargs['flash-cache'] = kwargs.pop('flash_cache')
 
-        try:
-            old = kwargs.pop('old')
-        except:
-            old = False
         # Create a volume
         docker_volume = self.client.create_volume(name=name, driver=driver,
                                                   driver_opts=kwargs)
@@ -46,8 +42,8 @@ class HPE3ParVolumePluginTest(BaseAPIIntegrationTest):
         self.assertIn('Name', docker_volume)
         self.assertEqual(docker_volume['Name'], name)
         self.assertIn('Driver', docker_volume)
-        if old:
-            self.assertEqual(docker_volume['Driver'], HPE3PAR2)
+        if driver == HPE3PAR_OLD:
+            self.assertEqual(docker_volume['Driver'], HPE3PAR_OLD)
         else:
             self.assertEqual(docker_volume['Driver'], HPE3PAR)
         # Verify all volume optional parameters in docker managed plugin system
@@ -73,27 +69,27 @@ class HPE3ParVolumePluginTest(BaseAPIIntegrationTest):
             self.assertNotIn('compression', docker_volume['Options'])
         return docker_volume
 
-    def hpe_delete_volume(self, name):
+    def hpe_delete_volume(self, volume, force=False):
         # Delete a volume
-        self.client.remove_volume(name)
-        result = self.client.volumes()
-        volumes = result['Volumes']
+        self.client.remove_volume(volume['Name'], force=force)
+        volumes = self.client.volumes()
         # Verify if volume is deleted from docker managed plugin system
-        self.assertEqual(volumes, None)
+        if volumes['Volumes']:
+            self.assertNotIn(volume, volumes['Volumes'])
+        else:
+            self.assertEqual(volumes['Volumes'], None)
 
-    def hpe_inspect_volume(self, name, driver, **kwargs):
-        # Create a volume
-        docker_volume = self.client.create_volume(name=name, driver=driver,
-                                                  driver_opts=kwargs)
+    def hpe_inspect_volume(self, volume):
         # Inspect a volume.
-        inspect_volume = self.client.inspect_volume(name)
-        self.assertEqual(docker_volume, inspect_volume)
+        inspect_volume = self.client.inspect_volume(volume['Name'])
+        self.assertEqual(volume, inspect_volume)
         return inspect_volume
 
     def hpe_create_host_config(self, volume_driver, binds, *args, **kwargs):
         # Create a host configuration to setup container
         host_config = self.client.create_host_config(volume_driver=volume_driver,
-                                                     binds=[binds], *args, **kwargs)
+                                                     binds=[binds], *args, **kwargs
+        )
         return host_config
 
     def hpe_create_container(self, image, command, host_config, *args, **kwargs):
@@ -101,7 +97,7 @@ class HPE3ParVolumePluginTest(BaseAPIIntegrationTest):
         container_info = self.client.create_container(image, command=command,
                                                       host_config=host_config,
                                                       *args, **kwargs
-                                                      )
+        )
         self.assertIn('Id', container_info)
         id = container_info['Id']
         self.tmp_containers.append(id)
@@ -112,7 +108,7 @@ class HPE3ParVolumePluginTest(BaseAPIIntegrationTest):
         container_info = self.client.create_container(image, command=command,
                                                       host_config=host_config,
                                                       *args, **kwargs
-                                                      )
+        )
         self.assertIn('Id', container_info)
         id = container_info['Id']
         self.tmp_containers.append(id)
@@ -130,20 +126,24 @@ class HPE3ParVolumePluginTest(BaseAPIIntegrationTest):
         self.assertEqual(inspect_start['State']['Running'], True)
         self.assertNotEqual(inspect_start['Mounts'], None)
         mount = dict(inspect_start['Mounts'][0])
-        self.assertEqual(mount['Driver'], HPE3PAR)
+        if host_config['VolumeDriver'] == HPE3PAR_OLD:
+            self.assertEqual(mount['Driver'], HPE3PAR_OLD)
+        else:
+            self.assertEqual(mount['Driver'], HPE3PAR)
         self.assertEqual(mount['RW'], True)
         self.assertEqual(mount['Type'], 'volume')
         self.assertNotEqual(mount['Source'], None)
         if not inspect_start['State']['Running']:
             self.assertIn('ExitCode', inspect_start['State'])
             self.assertEqual(inspect_start['State']['ExitCode'], 0)
+        return container_info
 
     def hpe_unmount_volume(self, image, command, host_config, *args, **kwargs):
         # Create a container
         container_info = self.client.create_container(image, command=command,
                                                       host_config=host_config,
                                                       *args, **kwargs
-                                                      )
+        )
         self.assertIn('Id', container_info)
         id = container_info['Id']
         self.tmp_containers.append(id)
@@ -158,6 +158,7 @@ class HPE3ParVolumePluginTest(BaseAPIIntegrationTest):
         state = inspect_stop['State']
         self.assertIn('Running', state)
         self.assertEqual(state['Running'], False)
+        return container_info
 
 class HPE3ParBackendVerification(BaseAPIIntegrationTest):
     """
@@ -239,8 +240,7 @@ class HPE3ParBackendVerification(BaseAPIIntegrationTest):
             self.assertEqual(etcd_volume, None)
         hpe3par_cli.logout()
 
-    def hpe_verify_volume_mount(self, volume_name, multipath=False):
-
+    def hpe_verify_volume_mount(self, volume_name):
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
         hpe3par_cli = self._hpe_get_3par_client_login()
         # Get volume details from etcd service
@@ -251,21 +251,14 @@ class HPE3ParBackendVerification(BaseAPIIntegrationTest):
         backend_volume_name = utils.get_3par_vol_name(etcd_volume_id)
         vluns = hpe3par_cli.getVLUNs()
         vlun_cnt = 0
-        # Multipath Verification
+        # VLUN Verification
         for member in vluns['members']:
             if member['volumeName'] == backend_volume_name and member['active']:
                 vlun_cnt += 1
-                if vlun_cnt == 2:
-                    break
-        if multipath:
-            self.assertEqual(vlun_cnt, 2)
-        else:
-            self.assertEqual(vlun_cnt, 1)
-                    
+        self.assertEqual(vlun_cnt, PORTS_ZONES)
         hpe3par_cli.logout()
 
     def hpe_verify_volume_unmount(self, volume_name):
-
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
         hpe3par_cli = self._hpe_get_3par_client_login()
         # Get volume details from etcd service
@@ -280,6 +273,7 @@ class HPE3ParBackendVerification(BaseAPIIntegrationTest):
             # Verify VLUN is not present in 3Par array.
             self.assertEqual(vlun, None)
         except exc.HTTPNotFound:
+            hpe3par_cli.logout()
             return
         hpe3par_cli.logout()
 
@@ -304,6 +298,7 @@ class HPE3ParBackendVerification(BaseAPIIntegrationTest):
         etcd_volume_id = etcd_volume['id']
         # Get volume details and VLUN details from 3Par array
         backend_volume_name = utils.get_3par_vol_name(etcd_volume_id)
-        return hpe3par_cli.getVolume(backend_volume_name)
+        hpe3par_volume = hpe3par_cli.getVolume(backend_volume_name)
         hpe3par_cli.logout()
-        
+        return hpe3par_volume
+

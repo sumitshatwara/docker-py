@@ -3,8 +3,10 @@ import pytest
 import yaml
 
 from .base import BaseAPIIntegrationTest, TEST_API_VERSION, BUSYBOX
+from .. import helpers
 from ..helpers import requires_api_version
 from hpe_3par_manager import HPE3ParBackendVerification,HPE3ParVolumePluginTest
+import pdb
 
 # Importing test data from YAML config file
 with open("testdata/test_config.yml", 'r') as ymlfile:
@@ -12,9 +14,10 @@ with open("testdata/test_config.yml", 'r') as ymlfile:
 
 # Declaring Global variables and assigning the values from YAML config file
 HPE3PAR = cfg['plugin']['latest_version']
-HPE3PAR2 = cfg['plugin']['old_version']
+HPE3PAR_OLD = cfg['plugin']['old_version']
 HOST_OS = cfg['platform']['os']
 CERTS_SOURCE = cfg['plugin']['certs_source']
+THIN_SIZE = cfg['volumes']['thin_size']
 
 
 @requires_api_version('1.25')
@@ -28,16 +31,16 @@ class PluginTest(HPE3ParBackendVerification,HPE3ParVolumePluginTest):
         )
         try:
             c.remove_plugin(HPE3PAR, force=True)
-            if HPE3PAR2:
-                c.remove_plugin(HPE3PAR2, force=True)
+            if HPE3PAR_OLD:
+                c.remove_plugin(HPE3PAR_OLD, force=True)
         except docker.errors.APIError:
             pass
 
     def teardown_method(self, method):
         try:
             self.client.disable_plugin(HPE3PAR)
-            if HPE3PAR2:
-                self.client.disable_plugin(HPE3PAR2)
+            if HPE3PAR_OLD:
+                self.client.disable_plugin(HPE3PAR_OLD)
         except docker.errors.APIError:
             pass
 
@@ -166,27 +169,107 @@ class PluginTest(HPE3ParBackendVerification,HPE3ParVolumePluginTest):
         assert self.client.enable_plugin(HPE3PAR)
 
     @requires_api_version('1.26')
-    def test_upgrade_plugin(self):
+    def test_upgrade_plugin_without_volume_operations(self):
         # This test will upgrade the plugin with same repository name
-        pl_data = self.ensure_plugin_installed(HPE3PAR2)
-        self.tmp_plugins.append(HPE3PAR2)
-        self.client.configure_plugin(HPE3PAR2, {
-            'certs.source': '/tmp/'
-        })
-        assert pl_data['Enabled'] is False
-        prv = self.client.plugin_privileges(HPE3PAR2)
-        logs = [d for d in self.client.upgrade_plugin(HPE3PAR2, HPE3PAR, prv)]
-        assert filter(lambda x: x['status'] == 'Download complete', logs)
+        pl_data = self.ensure_plugin_installed(HPE3PAR_OLD)
+        self.tmp_plugins.append(HPE3PAR_OLD)
         if HOST_OS == 'ubuntu':
-            self.client.configure_plugin(HPE3PAR2, {
+            self.client.configure_plugin(HPE3PAR_OLD, {
                 'certs.source': CERTS_SOURCE
                 })
         else:
-            self.client.configure_plugin(HPE3PAR2, {
+            self.client.configure_plugin(HPE3PAR_OLD, {
                 'certs.source': CERTS_SOURCE,
                 'glibc_libs.source': '/lib64'
                 })
-        assert self.client.inspect_plugin(HPE3PAR2)
-        assert self.client.enable_plugin(HPE3PAR2)
-        self.client.disable_plugin(HPE3PAR2)
-        self.client.remove_plugin(HPE3PAR2, force=True)
+        assert pl_data['Enabled'] is False
+        prv = self.client.plugin_privileges(HPE3PAR_OLD)
+        logs = [d for d in self.client.upgrade_plugin(HPE3PAR_OLD, HPE3PAR, prv)]
+        assert filter(lambda x: x['status'] == 'Download complete', logs)
+        if HOST_OS == 'ubuntu':
+            self.client.configure_plugin(HPE3PAR_OLD, {
+                'certs.source': CERTS_SOURCE
+                })
+        else:
+            self.client.configure_plugin(HPE3PAR_OLD, {
+                'certs.source': CERTS_SOURCE,
+                'glibc_libs.source': '/lib64'
+                })
+        assert self.client.inspect_plugin(HPE3PAR_OLD)
+        assert self.client.enable_plugin(HPE3PAR_OLD)
+        self.client.disable_plugin(HPE3PAR_OLD)
+        self.client.remove_plugin(HPE3PAR_OLD, force=True)
+
+    def test_upgrade_plugin_with_volume_operations(self):
+        # This test will upgrade the plugin with same repository name
+        pl_data = self.ensure_plugin_installed(HPE3PAR_OLD)
+        self.tmp_plugins.append(HPE3PAR_OLD)
+        if HOST_OS == 'ubuntu':
+            self.client.configure_plugin(HPE3PAR_OLD, {
+                    'certs.source': CERTS_SOURCE
+            })
+        else:
+            self.client.configure_plugin(HPE3PAR_OLD, {
+                    'certs.source': CERTS_SOURCE,
+                    'glibc_libs.source': '/lib64'
+            })
+        assert pl_data['Enabled'] is False
+        assert self.client.enable_plugin(HPE3PAR_OLD)
+        pl_data = self.client.inspect_plugin(HPE3PAR_OLD)
+        assert pl_data['Enabled'] is True
+
+        volume_name = helpers.random_name()
+        self.tmp_volumes.append(volume_name)
+        volume = self.hpe_create_volume(volume_name, driver=HPE3PAR_OLD,
+                                   size=THIN_SIZE, provisioning='thin')
+        host_conf = self.hpe_create_host_config(volume_driver=HPE3PAR_OLD,
+                                                binds=volume_name + ':/data1')
+        container_info = self.hpe_unmount_volume(BUSYBOX, command='sh', detach=True,
+                                    name=helpers.random_name(), tty=True, stdin_open=True,
+                                    host_config=host_conf
+        )
+
+        id = container_info['Id']
+        self.client.remove_container(id)
+        self.hpe_delete_volume(volume)
+
+
+        self.client.disable_plugin(HPE3PAR_OLD)
+        pl_data = self.client.inspect_plugin(HPE3PAR_OLD)
+        assert pl_data['Enabled'] is False
+
+
+        prv = self.client.plugin_privileges(HPE3PAR)
+        logs = [d for d in self.client.upgrade_plugin(HPE3PAR_OLD, HPE3PAR, prv)]
+        assert filter(lambda x: x['status'] == 'Download complete', logs)
+        if HOST_OS == 'ubuntu':
+            self.client.configure_plugin(HPE3PAR_OLD, {
+                    'certs.source': CERTS_SOURCE
+            })
+        else:
+            self.client.configure_plugin(HPE3PAR_OLD, {
+                    'certs.source': CERTS_SOURCE,
+                    'glibc_libs.source': '/lib64'
+            })
+        assert self.client.inspect_plugin(HPE3PAR_OLD)
+        assert self.client.enable_plugin(HPE3PAR_OLD)
+
+        client = docker.from_env(version=TEST_API_VERSION)
+        volume_name = helpers.random_name()
+        self.tmp_volumes.append(volume_name)
+        volume = self.hpe_create_volume(volume_name, driver=HPE3PAR_OLD,
+                               size=THIN_SIZE, provisioning='thin')
+        container = client.containers.run(BUSYBOX, "sh", detach=True, name=helpers.random_name(),
+                                          volumes=[volume_name + ':/insidecontainer'],
+                                          tty=True, stdin_open=True
+        )
+        self.tmp_containers.append(container.id)
+        self.hpe_verify_volume_mount(volume_name)
+        container.exec_run("sh -c 'echo \"hello\" > /insidecontainer/test'")
+        assert container.exec_run("cat /insidecontainer/test") == b"hello\n"
+        container.stop()
+        self.hpe_verify_volume_unmount(volume_name)
+        self.hpe_delete_volume(volume)
+        self.hpe_verify_volume_deleted(volume_name)
+
+

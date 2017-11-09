@@ -28,9 +28,10 @@ class VolumeBindTest(HPE3ParBackendVerification,HPE3ParVolumePluginTest):
     @classmethod
     def setUpClass(cls):
         c = docker.APIClient(
-            version=TEST_API_VERSION,
+            version=TEST_API_VERSION, timeout=600,
             **docker.utils.kwargs_from_env()
         )
+
         try:
             prv = c.plugin_privileges(HPE3PAR)
             for d in c.pull_plugin(HPE3PAR, prv):
@@ -55,7 +56,7 @@ class VolumeBindTest(HPE3ParBackendVerification,HPE3ParVolumePluginTest):
     @classmethod
     def tearDownClass(cls):
         c = docker.APIClient(
-            version=TEST_API_VERSION,
+            version=TEST_API_VERSION, timeout=600,
             **docker.utils.kwargs_from_env()
         )
         try:

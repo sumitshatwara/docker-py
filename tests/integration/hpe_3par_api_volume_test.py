@@ -28,14 +28,14 @@ class VolumesTest(HPE3ParBackendVerification,HPE3ParVolumePluginTest):
     @classmethod
     def setUpClass(cls):
         c = docker.APIClient(
-            version=TEST_API_VERSION,
+            version=TEST_API_VERSION, timeout=600,
             **docker.utils.kwargs_from_env()
         )
         try:
             prv = c.plugin_privileges(HPE3PAR)
             for d in c.pull_plugin(HPE3PAR, prv):
                 pass
-            # self.tmp_plugins.append(HPE3PAR)
+
             if HOST_OS == 'ubuntu':
                 c.configure_plugin(HPE3PAR, {
                     'certs.source': CERTS_SOURCE
@@ -56,7 +56,7 @@ class VolumesTest(HPE3ParBackendVerification,HPE3ParVolumePluginTest):
     @classmethod
     def tearDownClass(cls):
         c = docker.APIClient(
-            version=TEST_API_VERSION,
+            version=TEST_API_VERSION, timeout=600,
             **docker.utils.kwargs_from_env()
         )
         try:
@@ -64,7 +64,6 @@ class VolumesTest(HPE3ParBackendVerification,HPE3ParVolumePluginTest):
         except docker.errors.APIError:
             pass
 
-        # for p in self.tmp_plugins:
         try:
             c.remove_plugin(HPE3PAR, force=True)
         except docker.errors.APIError:

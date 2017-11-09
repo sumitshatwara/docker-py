@@ -322,15 +322,17 @@ class VolumeBindTest(HPE3ParBackendVerification,HPE3ParVolumePluginTest):
         self.assertEqual(out2, b'This volume will be shared between containers.\nBoth containers will use this.\n')
         out3 = container3.exec_run("touch /data1/Example2.txt")
         self.assertEqual(out3, b'touch: /data1/Example2.txt: Read-only file system\n')
-
         container3.stop()
-        container_list = client.containers.list(all=True, filters={'since': ETCD})
+        self.hpe_verify_volume_unmount(volume_name)
+        container_list = client.containers.list(all=True)
         for ctnr in container_list:
-            self.client.remove_container(ctnr.id)
+            try:
+                self.client.remove_container(ctnr.id)
+            except docker.errors.APIError:
+                continue
 
-        removed_ctnr_list = client.containers.list(all=True, filters={'since': ETCD})
-
-        assert len(removed_ctnr_list) == 0
+        removed_ctnr_list = client.containers.list(all=True)
+        assert len(removed_ctnr_list) == 1
         self.hpe_delete_volume(volume)
         self.hpe_verify_volume_deleted(volume_name)
 

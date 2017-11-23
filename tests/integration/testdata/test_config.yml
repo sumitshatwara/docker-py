@@ -35,4 +35,7 @@ backend:
 multipath:
     ports_zones: 2
 
+snapshot:
+    snap_cpg: SUMIT5
+
 

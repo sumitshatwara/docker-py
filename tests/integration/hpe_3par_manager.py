@@ -25,6 +25,7 @@ CLIENT_CERT = cfg['etcd']['client_cert']
 CLIENT_KEY = cfg['etcd']['client_key']
 HPE3PAR_API_URL = cfg['backend']['3Par_api_url']
 PORTS_ZONES = cfg['multipath']['ports_zones']
+SNAP_CPG = cfg['snapshot']['snap_cpg']
 
 @requires_api_version('1.21')
 class HPE3ParVolumePluginTest(BaseAPIIntegrationTest):
@@ -32,11 +33,15 @@ class HPE3ParVolumePluginTest(BaseAPIIntegrationTest):
     This class covers all base methods to verify entities in Docker Engine.
     """
     def hpe_create_volume(self, name, driver, **kwargs):
+        client = docker.APIClient(
+            version=TEST_API_VERSION, timeout=600,
+            **docker.utils.kwargs_from_env()
+        )
         if 'flash_cache' in kwargs:
             kwargs['flash-cache'] = kwargs.pop('flash_cache')
 
         # Create a volume
-        docker_volume = self.client.create_volume(name=name, driver=driver,
+        docker_volume = client.create_volume(name=name, driver=driver,
                                                   driver_opts=kwargs)
         # Verify volume entry in docker managed plugin system
         self.assertIn('Name', docker_volume)
@@ -47,26 +52,15 @@ class HPE3ParVolumePluginTest(BaseAPIIntegrationTest):
         else:
             self.assertEqual(docker_volume['Driver'], HPE3PAR)
         # Verify all volume optional parameters in docker managed plugin system
-        if 'size' in kwargs:
-            self.assertIn('size', docker_volume['Options'])
-            self.assertEqual(docker_volume['Options']['size'], kwargs['size'])
-        else:
-            self.assertNotIn('size', docker_volume['Options'])
-        if 'provisioning' in kwargs:
-            self.assertIn('provisioning', docker_volume['Options'])
-            self.assertEqual(docker_volume['Options']['provisioning'], kwargs['provisioning'])
-        else:
-            self.assertNotIn('provisioning', docker_volume['Options'])
-        if 'flash-cache' in kwargs:
-            self.assertIn('flash-cache', docker_volume['Options'])
-            self.assertEqual(docker_volume['Options']['flash-cache'], kwargs['flash-cache'])
-        else:
-            self.assertNotIn('flash-cache', docker_volume['Options'])
-        if 'compression' in kwargs:
-            self.assertIn('compression', docker_volume['Options'])
-            self.assertEqual(docker_volume['Options']['compression'], kwargs['compression'])
-        else:
-            self.assertNotIn('compression', docker_volume['Options'])
+        driver_options = ['size', 'provisioning', 'flash-cache', 'compression', 'cloneOf']
+
+        for option in driver_options:
+            if option in kwargs:
+                self.assertIn(option, docker_volume['Options'])
+                self.assertEqual(docker_volume['Options'][option], kwargs[option])
+            else:
+                self.assertNotIn(option, docker_volume['Options'])
+
         return docker_volume
 
     def hpe_delete_volume(self, volume, force=False):
@@ -84,6 +78,68 @@ class HPE3ParVolumePluginTest(BaseAPIIntegrationTest):
         inspect_volume = self.client.inspect_volume(volume['Name'])
         self.assertEqual(volume, inspect_volume)
         return inspect_volume
+
+    def hpe_create_snapshot(self, snapshot_name, driver, **kwargs):
+        # Create a snapshot
+        snapshot_creation = self.client.create_volume(name=snapshot_name, driver=driver,
+                                                      driver_opts=kwargs)
+        # Verify snapshot entry in docker managed plugin system
+        self.assertIn('Name', snapshot_creation)
+        self.assertEqual(snapshot_creation['Name'], snapshot_name)
+        self.assertIn('Driver', snapshot_creation)
+        if driver == HPE3PAR_OLD:
+            self.assertEqual(snapshot_creation['Driver'], HPE3PAR_OLD)
+        else:
+            self.assertEqual(snapshot_creation['Driver'], HPE3PAR)
+
+        volumes = self.client.volumes()
+        # Verify if created snapshot is not available docker volume lists
+        if volumes['Volumes']:
+            self.assertNotIn(snapshot_creation, volumes['Volumes'])
+        else:
+            self.assertEqual(volumes['Volumes'], None)
+
+        inspect_volume_snapshot = self.client.inspect_volume(kwargs['snapshotOf'])
+        snapshots = inspect_volume_snapshot['Status']['Snapshots']
+        snapshot_list = []
+        i = 0
+        for i in range(len(snapshots)):
+            snapshot_list.append(snapshots[i]['Name'])
+        self.assertIn(snapshot_name, snapshot_list)
+
+        inspect_snapshot = self.client.inspect_volume(kwargs['snapshotOf'] + '/' + snapshot_name)
+        snapshot_options = ['snapshotOf', 'expirationHours', 'retentionHours']
+
+        for option in snapshot_options:
+            if option in kwargs:
+                self.assertIn(option, snapshot_creation['Options'])
+                self.assertEqual(snapshot_creation['Options'][option], kwargs[option])
+            else:
+                self.assertNotIn(option, snapshot_creation['Options'])
+        if 'expirationHours' in kwargs:
+            self.assertEqual(inspect_snapshot['Status']['Settings']['expirationHours'],
+                                 int(kwargs['expirationHours']))
+        if 'retentionHours' in kwargs:
+            self.assertEqual(inspect_snapshot['Status']['Settings']['retentionHours'],
+                                 int(kwargs['retentionHours']))
+        return snapshot_creation
+
+    def hpe_delete_snapshot(self, volume_name, snapshot_name, force=False, retention=None):
+        # Delete a volume
+        self.client.remove_volume(volume_name + '/' + snapshot_name, force=force)
+        result = self.client.inspect_volume(volume_name)
+        if 'Status' not in result:
+            pass
+        else:
+            snapshots = result['Status']['Snapshots']
+            snapshot_list = []
+            i = 0
+            for i in range(len(snapshots)):
+                snapshot_list.append(snapshots[i]['Name'])
+            if retention is not None:
+                self.assertIn(snapshot_name, snapshot_list)
+            else:
+                self.assertNotIn(snapshot_name, snapshot_list)
 
     def hpe_create_host_config(self, volume_driver, binds, *args, **kwargs):
         # Create a host configuration to setup container
@@ -160,6 +216,37 @@ class HPE3ParVolumePluginTest(BaseAPIIntegrationTest):
         self.assertEqual(state['Running'], False)
         return container_info
 
+    def hpe_inspect_container_volume_mount(self, volume_name, container_name):
+        # Inspect container
+        inspect_container = self.client.inspect_container(container_name)
+        mount_source = inspect_container['Mounts'][0]['Source']
+        mount_status = mount_source.startswith( 'hpedocker-dm-uuid',109 )
+        self.assertEqual(mount_status, True)
+        # Inspect volume
+        inspect_volume = self.client.inspect_volume(volume_name)
+        mountpoint = inspect_volume['Mountpoint']
+        mount_status2 = mountpoint.startswith( 'hpedocker-dm-uuid',14 )
+        self.assertEqual(mount_status2, True)
+
+    def hpe_inspect_container_volume_unmount(self, volume_name, container_name):
+
+        # Inspect container
+        inspect_container = self.client.inspect_container(container_name)
+        mount_source = inspect_container['Mounts'][0]['Source']
+        mount_status = mount_source.startswith( 'hpedocker-dm-uuid',109 )
+        self.assertEqual(mount_status, False)
+        # Inspect volume
+        inspect_volume = self.client.inspect_volume(volume_name)
+        mountpoint = inspect_volume['Mountpoint']
+        mount_status2 = mountpoint.startswith( 'hpedocker-dm-uuid',14 )
+        self.assertEqual(mount_status2, False)
+
+    def hpe_list_volume(self):
+        # List volumes
+        volumes = self.client.volumes()
+        return volumes
+
+
 class HPE3ParBackendVerification(BaseAPIIntegrationTest):
     """
     This class covers all the methods to verify entities in 3Par array.
@@ -186,6 +273,8 @@ class HPE3ParBackendVerification(BaseAPIIntegrationTest):
         hpe3par_volume = hpe3par_cli.getVolume(backend_volume_name)
         # Verify volume and its properties in 3Par array
         self.assertEqual(hpe3par_volume['name'], backend_volume_name)
+        self.assertEqual(hpe3par_volume['copyType'], 1)
+        self.assertEqual(hpe3par_volume['state'], 1)
         if 'size' in kwargs:
             self.assertEqual(hpe3par_volume['sizeMiB'], int(kwargs['size']) * 1024)
         else:
@@ -197,8 +286,9 @@ class HPE3ParBackendVerification(BaseAPIIntegrationTest):
                 self.assertEqual(hpe3par_volume['provisioningType'], 2)
             elif kwargs['provisioning'] == 'dedup':
                 self.assertEqual(hpe3par_volume['provisioningType'], 6)
-            else:
-                self.assertEqual(hpe3par_volume['provisioningType'], 2)
+                self.assertEqual(hpe3par_volume['deduplicationState'], 1)
+        else:
+            self.assertEqual(hpe3par_volume['provisioningType'], 2)
         if 'flash_cache' in kwargs:
             if kwargs['flash_cache'] == 'true':
                 vvset_name = utils.get_3par_vvset_name(etcd_volume_id)
@@ -208,7 +298,7 @@ class HPE3ParBackendVerification(BaseAPIIntegrationTest):
                 # Ensure the created volume is a member of the vvset
                 self.assertIn(backend_volume_name,
                               [vv_name for vv_name in vvset['setmembers']]
-                              )
+                )
             else:
                 vvset_name = utils.get_3par_vvset_name(etcd_volume_id)
                 vvset = hpe3par_cli.getVolumeSet(vvset_name)
@@ -219,10 +309,12 @@ class HPE3ParBackendVerification(BaseAPIIntegrationTest):
                 self.assertEqual(hpe3par_volume['compressionState'], 1)
             else:
                 self.assertEqual(hpe3par_volume['compressionState'], 2)
+        if 'clone' in kwargs:
+            self.assertEqual(hpe3par_volume['snapCPG'], SNAP_CPG)
+            self.assertEqual(hpe3par_volume['copyType'], 1)
         hpe3par_cli.logout()
 
     def hpe_verify_volume_deleted(self, volume_name):
-
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
         hpe3par_cli = self._hpe_get_3par_client_login()
 
@@ -238,6 +330,66 @@ class HPE3ParBackendVerification(BaseAPIIntegrationTest):
         else:
             # Verify volume is removed from 3Par array
             self.assertEqual(etcd_volume, None)
+        hpe3par_cli.logout()
+
+    def hpe_verify_snapshot_created(self, volume_name, snapshot_name, **kwargs):
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        hpe3par_cli = self._hpe_get_3par_client_login()
+
+        # Get volume details from etcd service
+        et = EtcdUtil(ETCD_HOST, ETCD_PORT, CLIENT_CERT, CLIENT_KEY)
+        etcd_volume_snapshot = et.get_vol_byname(volume_name)
+        etcd_volume_id = etcd_volume_snapshot['id']
+        backend_volume_name = utils.get_3par_vol_name(etcd_volume_id)
+        etcd_snapshot = etcd_volume_snapshot['snapshots']
+        i=0
+        for i in range(len(etcd_snapshot)):
+            if etcd_snapshot[i]['name'] == snapshot_name:
+                etcd_snapshot_id = etcd_snapshot[i]['id']
+                backend_snapshot_name = utils.get_3par_snapshot_name(etcd_snapshot_id)
+                # Get volume details from 3Par array
+                hpe3par_snapshot = hpe3par_cli.getVolume(backend_snapshot_name)
+                # Verify volume and its properties in 3Par array
+                self.assertEqual(hpe3par_snapshot['name'], backend_snapshot_name)
+                self.assertEqual(hpe3par_snapshot['state'], 1)
+                self.assertEqual(hpe3par_snapshot['provisioningType'], 3)
+                self.assertEqual(hpe3par_snapshot['snapCPG'], SNAP_CPG)
+                self.assertEqual(hpe3par_snapshot['copyType'], 3)
+                self.assertEqual(hpe3par_snapshot['copyOf'], backend_volume_name)
+                if 'expirationHours' in kwargs:
+                    hpe_snapshot_expiration = int(hpe3par_snapshot['expirationTimeSec']) - int(
+                        hpe3par_snapshot['creationTimeSec'])
+                    docker_snapshot_expiration = int(kwargs['expirationHours']) * 60 * 60
+                    self.assertEqual(hpe_snapshot_expiration, docker_snapshot_expiration)
+                if 'retentionHours' in kwargs:
+                    hpe_snapshot_retention = int(hpe3par_snapshot['retentionTimeSec']) - int(
+                        hpe3par_snapshot['creationTimeSec'])
+                    docker_snapshot_retention = int(kwargs['retentionHours']) * 60 * 60
+                    self.assertEqual(hpe_snapshot_retention, docker_snapshot_retention)
+        hpe3par_cli.logout()
+
+    def hpe_verify_snapshot_deleted(self, volume_name, snapshot_name):
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        hpe3par_cli = self._hpe_get_3par_client_login()
+
+        # Get volume details from etcd service
+        et = EtcdUtil(ETCD_HOST, ETCD_PORT, CLIENT_CERT, CLIENT_KEY)
+        etcd_volume_snapshot = et.get_vol_byname(volume_name)
+        etcd_snapshot = etcd_volume_snapshot['snapshots']
+        etcd_snapshot_num = len(etcd_snapshot)
+        if etcd_snapshot_num > 0:
+            i = 0
+            for i in range(etcd_snapshot_num):
+                if etcd_snapshot[i]['name'] == snapshot_name:
+                    etcd_snapshot_id = etcd_snapshot[i]['id']
+                    backend_snapshot_name = utils.get_3par_snapshot_name(etcd_snapshot_id)
+                    # Get volume details from 3Par array
+                    hpe3par_snapshot = hpe3par_cli.getVolume(backend_snapshot_name)
+                    # Verify volume and its properties in 3Par array
+                    self.assertEqual(hpe3par_snapshot['name'], None)
+        else:
+            # Verify volume is removed from 3Par array
+            self.assertEqual(etcd_snapshot, [])
         hpe3par_cli.logout()
 
     def hpe_verify_volume_mount(self, volume_name):

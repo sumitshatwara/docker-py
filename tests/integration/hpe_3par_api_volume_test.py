@@ -248,4 +248,111 @@ class VolumesTest(HPE3ParBackendVerification,HPE3ParVolumePluginTest):
             self.hpe_delete_volume(volume, force=True)
             self.hpe_verify_volume_deleted(volume['Name'])
 
+    def test_thin_prov_compressed_volume(self):
+        '''
+           This is a volume create test with provisioning as 'thin' and compression enabled.
+
+           Steps:
+           1. Create a volume with provisioning=thin size=15 GB.
+           2. Verify the volume is not created with 'docker volume ls'
+           3. Verify the volume is not created from 3Par side.
+        '''
+        volume_name = helpers.random_name()
+        self.tmp_volumes.append(volume_name)
+        try:
+            volume = self.hpe_create_volume(volume_name, driver=HPE3PAR,
+                                        size="15", provisioning='thin', compression='true')
+        except Exception as ex:
+            resp = ex.status_code
+            self.assertEqual(resp, 500)
+        volume_list = self.hpe_list_volume()
+        self.assertIsNone(volume_list['Volumes'])
+        self.hpe_verify_volume_deleted(volume_name)
+
+    def test_full_prov_compressed_volume(self):
+        '''
+           This is a volume create test with provisioning as 'full' and compression enabled.
+
+           Steps:
+           1. Create a volume with provisioning=full size=16 GB.
+           2. Verify the volume is not created with 'docker volume ls'
+           3. Verify the volume is not created from 3Par side.
+        '''
+        volume_name = helpers.random_name()
+        self.tmp_volumes.append(volume_name)
+        try:
+            volume = self.hpe_create_volume(volume_name, driver=HPE3PAR,
+                                        size="16", provisioning='full', compression='true')
+        except Exception as ex:
+            resp = ex.status_code
+            self.assertEqual(resp, 500)
+        volume_list = self.hpe_list_volume()
+        self.assertIsNone(volume_list['Volumes'])
+        self.hpe_verify_volume_deleted(volume_name)
+
+    def test_dedup_prov_compressed_volume(self):
+        '''
+           This is a volume create test with provisioning as 'dedup' and compression enabled.
+
+           Steps:
+           1. Create a volume with provisioning=dedup size=15 GB.
+           2. Verify the volume is not created with 'docker volume ls'
+           3. Verify the volume is not created from 3Par side.
+        '''
+        volume_name = helpers.random_name()
+        self.tmp_volumes.append(volume_name)
+        try:
+            volume = self.hpe_create_volume(volume_name, driver=HPE3PAR,
+                                        size="15", provisioning='dedup', compression='true')
+        except Exception as ex:
+            resp = ex.status_code
+            self.assertEqual(resp, 500)
+        volume_list = self.hpe_list_volume()
+        self.assertIsNone(volume_list['Volumes'])
+        self.hpe_verify_volume_deleted(volume_name)
+
+    def test_thin_prov_compressed_flashcache_volume(self):
+        '''
+           This is a volume create test with provisioning as 'thin' and compression & flashcache enabled.
+
+           Steps:
+           1. Create a volume with provisioning=thin size=17 GB compression and flashcache enabled.
+           2. Verify if volume and its properties are present in 3Par array.
+           3. Inspect this volume.
+           4. Delete this volume.
+           5. Verify if volume is removed from 3Par array.
+        '''
+        name = helpers.random_name()
+        self.tmp_volumes.append(name)
+        volume = self.hpe_create_volume(name, driver=HPE3PAR, size=COMPRESS_SIZE,
+                                        provisioning='thin', compression='true', flash_cache='true')
+        # Verifying in 3par array
+        self.hpe_verify_volume_created(name, size=COMPRESS_SIZE,
+                                       provisioning='thin', compression='true', flash_cache='true')
+        self.hpe_inspect_volume(volume)
+        self.hpe_delete_volume(volume)
+        self.hpe_verify_volume_deleted(name)
+
+    def test_dedup_prov_compressed_flashcache_volume(self):
+        '''
+           This is a volume create test with provisioning as 'thin' and compression & flashcache enabled.
+
+           Steps:
+           1. Create a volume with provisioning=dedup size=17 GB compression and flashcache enabled.
+           2. Verify if volume and its properties are present in 3Par array.
+           3. Inspect this volume.
+           4. Delete this volume.
+           5. Verify if volume is removed from 3Par array.
+        '''
+        name = helpers.random_name()
+        self.tmp_volumes.append(name)
+        volume = self.hpe_create_volume(name, driver=HPE3PAR, size=COMPRESS_SIZE,
+                                        provisioning='dedup', compression='true', flash_cache='true')
+        # Verifying in 3par array
+        self.hpe_verify_volume_created(name, size=COMPRESS_SIZE,
+                                       provisioning='dedup', compression='true', flash_cache='true')
+        self.hpe_inspect_volume(volume)
+        self.hpe_delete_volume(volume)
+        self.hpe_verify_volume_deleted(name)
+
 

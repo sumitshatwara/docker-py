@@ -374,4 +374,77 @@ class VolumeBindTest(HPE3ParBackendVerification,HPE3ParVolumePluginTest):
         self.assertEqual(out, b'/data1/random: OK\n')
         container1.stop()
 
+    def test_mount_unmount_compressed_volume(self):
+        '''
+           This is a test to verify mount and unmount a compressed volume.
+
+           Steps:
+           1. Create volume and verify if volume got created in docker host and 3PAR array
+           2. Create a host config file to setup container.
+           3. Create a container and mount volume to it.
+           4. Inspect containers and verify the volume is mounted or not
+           5. Verify if VLUN is available in 3Par array.
+           6. Write data on volume
+           7. Unmount the volume
+           8. Verify if VLUN entry is not available in 3Par array.
+           9. Read the data from the volume
+
+        '''
+        client = docker.from_env(version=TEST_API_VERSION)
+        volume_name = helpers.random_name()
+        container_name = helpers.random_name()
+        self.tmp_volumes.append(volume_name)
+        volume = self.hpe_create_volume(volume_name, driver=HPE3PAR,
+                               size="17", provisioning='thin', compression='true')
+        container = client.containers.run(BUSYBOX,"sh", detach=True,
+                                          name=container_name, tty=True, stdin_open=True,
+                                          volumes=[volume_name + ':/insidecontainer']
+        )
+        self.tmp_containers.append(container.id)
+        self.hpe_inspect_container_volume_mount(volume_name,container_name)
+        self.hpe_verify_volume_mount(volume_name)
+        container.exec_run("sh -c 'echo \"hello compressed volume\" > /insidecontainer/test'")
+        container.stop()
+        self.hpe_inspect_container_volume_unmount(volume_name,container_name)
+        self.hpe_verify_volume_unmount(volume_name)
+        container.start()
+        assert container.exec_run("cat /insidecontainer/test") == b"hello compressed volume\n"
+
+    def test_delete_compressed_volume(self):
+        '''
+           This is a delete compressed volume test.
+
+           Steps:
+           1. Create volume and verify if volume got created in docker host and 3PAR array
+           2. Create a host config file to setup container.
+           3. Create a container and mount volume to it.
+           4. Try to delete the volume - it should not get deleted
+           5. List volumes - Volume should be listed
+           6. Stop the container
+           7. Delete the volume - Volume should get deleted.
+           8. List volumes - Volume should not be listed.
+
+        '''
+        client = docker.from_env(version=TEST_API_VERSION)
+        volume_name = helpers.random_name()
+        container_name = helpers.random_name()
+        self.tmp_volumes.append(volume_name)
+        volume = self.hpe_create_volume(volume_name, driver=HPE3PAR,
+                               size="17", provisioning='thin', compression='true')
+        container = client.containers.run(BUSYBOX,"sh", detach=True,
+                                          name=container_name, tty=True, stdin_open=True,
+                                          volumes=[volume_name + ':/insidecontainer']
+        )
+        self.tmp_containers.append(container.id)
+        try:
+            self.client.remove_volume(volume_name)
+        except Exception as ex:
+            resp = ex.status_code
+            self.assertEqual(resp, 409)
+        self.hpe_verify_volume_created(volume_name,size="17",provisioning='thin')
+        container.stop()
+        container.remove()
+
+        self.hpe_delete_volume(volume)
+        self.hpe_verify_volume_deleted(volume_name)
 
